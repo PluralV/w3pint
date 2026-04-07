@@ -80,19 +80,21 @@ class RequestCollector extends BaseCollector {
     }
 
     /**
-     * @param {RequestId} id 
+     * @param {RequestId} id
      * @param {import('puppeteer').CDPSession} cdp
      */
-    async getResponseBodyHash(id, cdp) {
+    async fetchResponseBody(id, cdp) {
         try {
             // @ts-ignore oversimplified .send signature
-            let {body, base64Encoded} = await cdp.send('Network.getResponseBody', {requestId: id});
+            const {body, base64Encoded} = await cdp.send('Network.getResponseBody', {requestId: id});
 
-            if (base64Encoded) {
-                body = Buffer.from(body, 'base64').toString('utf-8');
+            let hash = null;
+            if (this._saveResponseHash) {
+                const bytes = base64Encoded ? Buffer.from(body, 'base64') : Buffer.from(body);
+                hash = crypto.createHash('sha256').update(bytes).digest('hex');
             }
 
-            return crypto.createHash('sha256').update(body).digest('hex');
+            return {body, bodyIsBase64: Boolean(base64Encoded), hash};
         } catch (e) {
             return null;
         }
@@ -132,6 +134,10 @@ class RequestCollector extends BaseCollector {
          * @type {InternalRequestData}
          */
         const requestData = {id, url, method, type, initiator, startTime};
+
+        if (request.postData) {
+            requestData.requestBody = request.postData;
+        }
 
         // if request A gets redirected to B which gets redirected to C chrome will produce 4 events:
         // requestWillBeSent(A) requestWillBeSent(B) requestWillBeSent(C) responseReceived()
@@ -270,8 +276,11 @@ class RequestCollector extends BaseCollector {
         request.endTime = data.timestamp;
         request.failureReason = data.errorText || 'unknown error';
 
-        if (this._saveResponseHash) {
-            request.responseBodyHash = await this.getResponseBodyHash(data.requestId, cdp);
+        const failResult = await this.fetchResponseBody(data.requestId, cdp);
+        if (failResult) {
+            request.responseBodyHash = failResult.hash;
+            request.responseBody = failResult.body;
+            request.responseBodyIsBase64 = failResult.bodyIsBase64;
         }
     }
 
@@ -295,8 +304,11 @@ class RequestCollector extends BaseCollector {
         request.endTime = data.timestamp;
         request.size = data.encodedDataLength;
 
-        if (this._saveResponseHash) {
-            request.responseBodyHash = await this.getResponseBodyHash(data.requestId, cdp);
+        const result = await this.fetchResponseBody(data.requestId, cdp);
+        if (result) {
+            request.responseBodyHash = result.hash;
+            request.responseBody = result.body;
+            request.responseBodyIsBase64 = result.bodyIsBase64;
         }
     }
 
@@ -335,6 +347,9 @@ class RequestCollector extends BaseCollector {
                 remoteIPAddress: request.remoteIPAddress,
                 responseHeaders: request.responseHeaders && filterHeaders(request.responseHeaders, this._saveHeaders),
                 responseBodyHash: request.responseBodyHash,
+                requestBody: request.requestBody,
+                responseBody: request.responseBody,
+                responseBodyIsBase64: request.responseBodyIsBase64,
                 failureReason: request.failureReason,
                 redirectedTo: request.redirectedTo,
                 redirectedFrom: request.redirectedFrom,
@@ -358,6 +373,9 @@ module.exports = RequestCollector;
  * @property {string} remoteIPAddress
  * @property {object} responseHeaders
  * @property {string=} responseBodyHash
+ * @property {string=} requestBody
+ * @property {string=} responseBody
+ * @property {boolean=} responseBodyIsBase64
  * @property {string} failureReason
  * @property {number=} size in bytes
  * @property {number=} time in seconds
@@ -380,6 +398,9 @@ module.exports = RequestCollector;
  * @property {Timestamp=} startTime
  * @property {Timestamp=} endTime
  * @property {string=} responseBodyHash
+ * @property {string=} requestBody
+ * @property {string=} responseBody
+ * @property {boolean=} responseBodyIsBase64
  */
 
 /**
@@ -404,6 +425,7 @@ module.exports = RequestCollector;
  * @property {HttpMethod} method
  * @property {object} headers
  * @property {'VeryLow'|'Low'|'Medium'|'High'|'VeryHigh'} initialPriority
+ * @property {string=} postData
  */
 
 /**
