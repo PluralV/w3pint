@@ -1,0 +1,17 @@
+{
+    "js_lines": [
+        "window.ethereum",
+        "web3.js",
+        "ethers.js",
+        "metamask",
+        "connectWallet",
+        "solana",
+        "phantom"
+    ],
+    "domains": [
+        "infura.io",
+        "alchemy.com",
+        "etherscan.io",
+        "cloudflare-eth.com"
+    ]
+}

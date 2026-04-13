@@ -1,0 +1,28 @@
+[Unit]
+Description=Puppeteer Wallet Crawler Docker Container
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User={{ansible_user}}
+Group=docker
+WorkingDirectory={{ install_dir }}
+
+ExecStartPre=/usr/bin/docker build -t wallet-crawler -f {{ install_dir }}/Web3-Privacy/framework/request-interceptor/Dockerfile {{ install_dir }}/Web3-Privacy/framework/request-interceptor
+ExecStart=/usr/bin/docker run --rm \
+    --name wallet-crawler \
+    --env-file {{ env_file }} \
+    --shm-size=2g \
+    -v {{ credentials_file }}:/crawler/metamask_credentials.json:ro \
+    wallet-crawler
+
+ExecStop=-/usr/bin/docker stop wallet-crawler
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
