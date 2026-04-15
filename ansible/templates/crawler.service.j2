@@ -1,0 +1,26 @@
+[Unit]
+Description=Selenium Crawler Docker Container
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User={{ansible_user}}
+Group=docker
+WorkingDirectory={{ install_dir }}
+
+ExecStartPre=/usr/bin/docker build -t crawler {{ install_dir }}
+ExecStart=/usr/bin/docker run --rm \
+    --name crawler \
+    --env-file {{ env_file }} \
+    crawler python3 sel-base.py
+
+ExecStop=-/usr/bin/docker stop crawler
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

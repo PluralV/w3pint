@@ -4,7 +4,7 @@ import time
 import datetime
 import shutil
 import logging
-from pymongo import MongoClient
+import sys
 import pandas as pd
 from seleniumwire import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -14,6 +14,8 @@ from webdriver_manager.chrome import ChromeDriverManager
 from urllib.parse import urlparse
 from confluent_kafka import Consumer, Producer, KafkaException
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mongodb import init_db, insert_crawl_result
 
 # Load environment variables
 load_dotenv()
@@ -24,9 +26,6 @@ INDEX_TOPIC = os.getenv("INDEX_TOPIC")
 
 #env for database
 DB_HOST = os.getenv("DB_HOST")
-DB_USER = os.getenv("DB_USER")
-DB_PWD = os.getenv("DB_PWD")
-DB_NAME = os.getenv("DB_NAME")
 
 # Constants
 base_path = "../../setup/chrome/browser_setup/versions/"
@@ -67,8 +66,9 @@ def launch_selenium_wire_browser(chrome_path, time_start, domain_slug):
     driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
 
+
 def extract_domains(driver):
-    additional_reqs = set()
+    additional_reqs = []
     for request in driver.requests:
         if request.host:
             request_obj = {
@@ -83,7 +83,7 @@ def extract_domains(driver):
                 request_obj["type"] = cont_type
             else:
                 request_obj["status"] = -1 #If no response was received, status code -1
-            additional_reqs.add(request_obj)
+            additional_reqs.append(request_obj)
     return additional_reqs
 
 
@@ -94,7 +94,7 @@ def save_domains(domain_slug, domains):
         for domain in sorted(domains):
             f.write(f"{domain}\n")
 
-def main(mdb_client):
+def main():
     os.makedirs("run_logs", exist_ok=True)
     time_start = datetime.datetime.now(tz=datetime.timezone.utc)
     log_file = f"run_logs/crawl_log_{str(time_start)}.log"
@@ -127,41 +127,54 @@ def main(mdb_client):
             if msg.error():
                 raise KafkaException(msg.error())
 
-            message_str = msg.value().decode('utf-8')
+            message_str = msg.value().decode('utf-8').split(',')[0]
             index_start = message_str.find("DNS:")
             if index_start == -1:
-                url = message_str
+                index_start = message_str.find("IP Address:")
+                url = message_str if index_start == -1 else message_str[index_start+11:]
             else:
                 url = message_str[index_start+4:]
+            url = url[2:] if url.startswith("*.") else url
             domain_slug = get_slug(url)
             driver = None
             retries = 0
             while retries < 3:
                 try:
+                    #logging.info('Launching driver.')
                     driver = launch_selenium_wire_browser(chrome_binary_path, time_start, domain_slug)
-                    driver.get(url)
+                    #logging.info(f'Fetching URL: {url}')
+                    driver.get(f'https://{url}')
                     base_status = -1
                     for request in driver.requests:
                         if request.url == url and request.response:
                             base_status = request.response.status_code
                             break
                     time.sleep(2)
+                    #logging.info('Extracting domains.')
                     extra_requests = extract_domains(driver)
                     # save_domains(domain_slug, extra_requests)
                     result_log = {
                         'redirectedUrl': url,
-                        'accessedDate': datetime.datetime.now(tz=datetime.timezone.utc).isoformat(),
+                        'accessedDate': datetime.datetime.now(tz=datetime.timezone.utc),
                         'status':base_status,
                         'pageSrc': driver.page_source,
                         'additionalRequests': list(extra_requests),
-                        'interactions':[] #TODO: once interactions are recorded add in
+                        'interactions':None #TODO: once interactions are recorded add in
                     }
-                    result_log_json = json.dumps(result_log)
-
                     '''Commit to database:'''
-                    '''TODO TODO TODO'''
-                    '''use mdb_client to insert the json object as document etc'''
+                    #logging.info('Committing to database.')
+                    ins_res = insert_crawl_result(
+                        url=result_log['redirectedUrl'],
+                        redirected_url=result_log['redirectedUrl'],
+                        accessed_date=result_log['accessedDate'],
+                        status=result_log['status'],
+                        page_src=result_log['pageSrc'],
+                        additional_requests=result_log['additionalRequests'],
+                        interactions=result_log['interactions']
+                    )
+                    logging.info(ins_res)
                     '''Commit URL back to Kafka queue:'''
+                    #logging.info('Committing to Kafka topic.')
                     producer.produce(INDEX_TOPIC, result_log['redirectedUrl'].encode('utf-8'))
                     producer.flush()
 
@@ -171,28 +184,21 @@ def main(mdb_client):
                     break
                 except Exception as e:
                     retries +=1
-                    error_msg = str(e).split("\n")[0]
+                    error_msg = str(e)#.split("\n")[0]
                     logging.error(f"Failed to visit {url}: {error_msg}")
                 finally:
-                    if retries == 3:
-                        consumer.commit(msg)
                     if driver:
                         driver.quit()
                     shutil.rmtree(f"/tmp/chrome-profile-{str(time_start)}/{domain_slug}", ignore_errors=True)
+            if retries >= 3:
+                consumer.commit(msg) #give up and commit
     finally:
         consumer.close()
 
+
 if __name__ == "__main__":
-    # try:
-    #     mdb_client = MongoClient(f"mongodb://{DB_USER}:{DB_PASS}@{DATABASE_ADDR}")
-    #     mdb_client.connect()
-    #     # Send a ping to confirm a successful connection
-    #     mdb_client.admin.command({'ping': 1})
-    #     logging.info("Successfully connected to MongoDB!")
-    # except Exception as e:
-    #     logging.error(f"Failed to connect to MongoDB: {e}")
-    #     exit(-1)
-    main(None)
+    init_db(DB_HOST)
+    main()
     # mdb_client.close()
 
     # logs = os.listdir('logs/')

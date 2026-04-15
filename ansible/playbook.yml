@@ -1,0 +1,65 @@
+---
+- name: Install and run crawler
+  hosts: crawlers
+  become: true
+  vars_files:
+    - vars.yml
+
+  tasks:
+    - name: Install dependencies
+      apt:
+        name:
+          - git
+          - docker.io
+        state: present
+        update_cache: true
+
+    - name: Add user to docker group
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+
+    - name: Clone repository
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ install_dir }}"
+        key_file: "{{ git_key_file }}"
+        accept_hostkey: yes
+        update: true  # pulls latest if already cloned
+
+    - name: Create env directory
+      file:
+        path: /etc/crawler
+        state: directory
+        owner: root
+        group: docker
+        mode: '0750'
+
+    - name: Deploy env file
+      template:
+        src: templates/.env.j2
+        dest: "{{ env_file }}"
+        owner: root
+        group: docker
+        mode: '0640'  # restrict read access since it has credentials
+
+    - name: Build Docker image
+      community.docker.docker_image:
+        name: crawler
+        build:
+          path: "{{ install_dir }}"   # build context = web23/crawler
+        source: build
+        force_source: true
+
+    - name: Deploy systemd service
+      template:
+        src: templates/crawler.service.j2
+        dest: /etc/systemd/system/crawler.service
+
+    - name: Enable and start service
+      systemd:
+        name: crawler
+        enabled: true
+        state: started
+        daemon_reload: true

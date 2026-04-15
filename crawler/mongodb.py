@@ -72,10 +72,6 @@ base_properties = {
             }
         },
         "description": "Optional array of interactions that occurred during the crawl. Subject to change"
-    },
-    "crawlerType": {
-        "bsonType": "int",
-        "description": "Crawler type flag. 1 = Puppeteer wallet crawler, 0 or absent = Selenium crawler."
     }
 }
 
